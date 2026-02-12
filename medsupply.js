@@ -630,8 +630,11 @@ function renderPage(title, content, user) {
   <div style="position:relative;">
     ${
       user ? `
+      <div id="publicOrders" style="display:inline-block; cursor:pointer; font-weight:500;">
+        <a href="/public-feed">Public Orders</a>
+      </div>
       <div id="profileMenu" style="display:inline-block; cursor:pointer; font-weight:500;">
-        ${user.hospital_name} (${user.role}) ▼
+        ${user.hospital_name} ▼
       </div>
       <div id="profileDropdown" style="
         display:none;
