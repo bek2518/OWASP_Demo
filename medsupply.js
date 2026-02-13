@@ -4,6 +4,7 @@ const bcrypt = require("bcrypt");
 const crypto = require("crypto");
 const axios = require("axios");
 const Database = require("better-sqlite3");
+const path = require("path")
 const app = express();
 const db = new Database("medsupply.db");
 
@@ -16,6 +17,7 @@ app.use(
     saveUninitialized: true,
   }),
 );
+app.use("/js", express.static(path.join(__dirname, "public/js")));
 
 /* =================================================
    DATABASE
@@ -243,6 +245,7 @@ app.get("/register", (req, res) => {
 
 app.get("/profile", requireAuth, (req, res) => {
   const user = req.session.user;
+  //if (req.session.mfa_verified) {
   res.send(renderPage("Account Profile", `
     <div class="card" style="max-width:500px;margin:auto;">
       <h2>Account Profile</h2>
@@ -252,6 +255,9 @@ app.get("/profile", requireAuth, (req, res) => {
       <p><em>Manage your account details here.</em></p>
     </div>
   `, user));
+//} else {
+//  res.status(403).send("Forbidden")
+//}
 });
 
 
@@ -299,9 +305,15 @@ app.get("/login", (req, res) => {
 app.post("/login", async (req, res) => {
   const { email, password } = req.body;
   const user = db.prepare("SELECT * FROM users WHERE email=?").get(email);
-  if (!user) return res.send("Invalid credentials");
+  if (!user) {
+    return res.send(renderLoginPage({ error: "Invalid credentials" }, req));
+  }
+
   const valid = await bcrypt.compare(password, user.password_hash);
-  if (!valid) return res.send("Invalid credentials");
+  if (!valid) {
+    return res.send(renderLoginPage({ error: "Invalid credentials" }, req));
+  }
+
   req.session.user = user;
   req.session.mfa_verified = false;
 
@@ -341,68 +353,45 @@ app.get("/verify-otp", requireAuth, (req, res) => {
 
 app.post("/verify-otp", requireAuth, (req, res) => {
   const { otp } = req.body;
+
   if (otp === req.session.otp && Date.now() < req.session.otp_expires) {
     req.session.mfa_verified = true;
     return res.redirect("/dashboard");
   }
-  res.send("Invalid or expired OTP");
+  return res.send(renderOTPPage({ error: "Invalid or Expired OTP" }, req));
 });
 
 /* ---------- DASHBOARD ---------- */
 app.get("/dashboard", requireAuth, (req, res) => {
-  const orders = db
-    .prepare("SELECT * FROM orders WHERE user_id=?")
-    .all(req.session.user.id);
-  let totalOrders = orders.length;
-  let pending = orders.filter((o) =>
-    o.status.toLowerCase().includes("pending"),
-  ).length;
-  let shipped = orders.filter((o) =>
-    o.status.toLowerCase().includes("shipped"),
-  ).length;
-
-  let orderRows = orders
-    .map(
-      (o) => `
-<tr>
-  <td>${o.medication_name}</td>
-  <td>${o.quantity}</td>
-  <td><span class="status-badge ${o.status.toLowerCase().replace(/\s/g, "")}">${o.status}</span></td>
-  <td>${o.batch_number}</td>
-  <td>${new Date(o.requested_at).toLocaleDateString()}</td>
-</tr>
-`,
-    )
-    .join("");
-
   res.send(
     renderPage(
       "Dashboard",
       `
- <div class="grid">
-  <div class="card" style="background:#e3f2fd">
-    <h3>Total Orders</h3><p>${totalOrders}</p>
-  </div>
-  <div class="card" style="background:#fff3e0">
-    <h3>Pending Orders</h3><p>${pending}</p>
-  </div>
-  <div class="card" style="background:#e8f5e9">
-    <h3>Shipped Orders</h3><p>${shipped}</p>
-  </div>
-</div>
+      <div id="dashboard" data-user-id="${req.session.user.id}">
+        <div id="stats"></div>
+        <div id="orders"></div>
+      </div>
 
-    <div class="card">
-      <h2>Order List</h2>
-      <table>
-        <tr><th>Medication</th><th>Quantity</th><th>Status</th><th>Batch</th><th>Requested At</th><th>Image</th></tr>
-        ${orderRows}
-      </table>
-    </div>
-  `,
+      <script src="/js/dashboard.js"></script>
+      `,
       currentUser(req),
-    ),
+    )
   );
 });
+
+/*-- Added to subtly give the idea that the user ID is a UUID--*/
+app.get("/api/users/:userId/orders", requireAuth, (req, res) => {
+  if (req.session.user.id === req.params.userId) {
+    const orders = db
+      .prepare("SELECT * FROM orders WHERE user_id=?")
+      .all(req.params.userId);
+
+    res.json(orders);
+  } else {
+    res.status(403).send("Forbidden")
+  }
+});
+
 
 /* ---------- PROFILE ---------- */
 app.get("/profile", requireAuth, (req, res) => res.json(req.session.user));
@@ -478,7 +467,7 @@ fetch("/api/public-orders")
         "<td>"+order.medication_name+"</td>" +
         "<td>"+order.quantity+"</td>" +
         "<td>"+order.hospital_name+"</td>" +
-        "<td><span class='status-badge "+order.status.toLowerCase().replace(/\s/g,'')+"'>"+order.status+"</span></td>" +
+        "<td><span class='status-badge "+order.status.toLowerCase()+"'>"+order.status+"</span></td>" +
         "</tr>";
     });
     html += "</table>";
@@ -597,7 +586,7 @@ function renderPage(title, content, user) {
         font-weight: 600;
       }
       .pending { background: #fb8c00; }
-      .shipped { background: #43a047; }
+      .shipped { background: #0eec19; }
       .delivered { background: #1e88e5; }
       input, button {
         padding: 8px 12px;
@@ -626,12 +615,19 @@ function renderPage(title, content, user) {
   </head>
   <body>
  <header>
-  <div><strong>MedSupply Procurement Portal</strong></div>
+  <div><strong><a href="/">MedSupply Procurement Portal</a></strong></div>
   <div style="position:relative;">
     ${
       user ? `
+      <div id="dashboardChange" style="display:inline-block; cursor:pointer; font-weight:500;">
+        <a href="/dashboard">Dashboard</a>
+      </div>
+      <div id="separator" style="display:inline-block; cursor:pointer; font-weight:500;">
+      </div>
       <div id="publicOrders" style="display:inline-block; cursor:pointer; font-weight:500;">
         <a href="/public-feed">Public Orders</a>
+      </div>
+      <div id="separator" style="display:inline-block; cursor:pointer; font-weight:500;">
       </div>
       <div id="profileMenu" style="display:inline-block; cursor:pointer; font-weight:500;">
         ${user.hospital_name} ▼
@@ -688,6 +684,66 @@ function renderPage(title, content, user) {
   </html>
   `;
 }
+
+function renderLoginPage(options = {}, req) {
+  const { error = null } = options;
+
+  return renderPage(
+    "Login",
+    `
+    <div class="card">
+      <h2>Login</h2>
+
+      ${
+        error
+          ? `
+        <div style="text-align:center; margin-bottom:15px;">
+          <p style="color:red; font-weight:bold;">${error}</p>
+        </div>
+      `
+          : ""
+      }
+
+      <form method="POST">
+        Email:<input name="email"/><br>
+        Password:<input type="password" name="password"/><br>
+        <button>Login</button>
+      </form>
+    </div>
+    `,
+    currentUser(req)
+  );
+}
+
+function renderOTPPage(options = {}, req) {
+  const { error = null } = options;
+
+  return renderPage(
+    "OTP Verification",
+    `
+    <div class="card">
+    <h2>Enter OTP</h2>
+
+      ${
+        error
+          ? `
+        <div style="text-align:center; margin-bottom:15px;">
+          <p style="color:red; font-weight:bold;">${error}</p>
+        </div>
+      `
+          : ""
+      }
+      <form method="POST">
+        OTP Code:<input name="otp"/><br>
+        <button>Verify</button>
+      </form>
+    </div>
+    `,
+    currentUser(req)
+  );
+}
+
+
 
 app.listen(3000, () =>
   console.log("MedSupply running at http://localhost:3000"),

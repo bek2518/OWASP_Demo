@@ -2,12 +2,23 @@ const { spawn } = require("child_process");
 
 // Start the MedSupply app
 const server = spawn("node", ["medsupply.js"], { stdio: "inherit" });
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function delayedActions() {
+  await sleep(2000);
+}
+
+delayedActions();
 const mailer = spawn("node", ["mailer.js"], {stdio: "inherit"});
 
 // Function to gracefully shutdown
 function shutdown() {
   console.log("\nShutting down MedSupply server gracefully...");
   server.kill("SIGTERM");
+  mailer.kill("SIGTERM")
   process.exit(0);
 }
 
